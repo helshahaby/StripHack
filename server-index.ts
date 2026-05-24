@@ -1,50 +1,48 @@
+/**
+ * PropVoice Express Server
+ * Mounts all routes and starts cron schedulers.
+ */
+
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import stripeWebhookRouter from './routes/stripeWebhook.js';
-import voiceAgentRouter from './routes/voiceAgent.js';
+import stripeWebhookRouter from '../routes/stripeWebhook.js';
+import voiceAgentRouter from '../routes/voiceAgent.js';
+import apiRouter from '../routes/api.js';
+import { startAllSchedulers } from '../jobs/RentScheduler.js';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT ?? 3000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ─── IMPORTANT: Stripe webhook MUST be mounted BEFORE express.json() ──────────
-// Stripe needs the raw body buffer to verify the webhook signature.
+// ── CRITICAL: Stripe webhooks BEFORE express.json() ──────────────────────────
 app.use('/api/webhooks', stripeWebhookRouter);
 
-// ─── Standard middleware ───────────────────────────────────────────────────────
+// ── Standard middleware ───────────────────────────────────────────────────────
 app.use(express.json());
 
-// ─── API Routes ───────────────────────────────────────────────────────────────
+// ── API Routes ────────────────────────────────────────────────────────────────
 app.use('/api/voice', voiceAgentRouter);
+app.use('/api', apiRouter);
 
-// ─── Health check (Railway uses this to confirm deploy is live) ───────────────
+// ── Health check (Railway liveness probe) ────────────────────────────────────
 app.get('/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'PropVoice API',
-    timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV ?? 'development',
-  });
+  res.json({ status: 'ok', service: 'PropVoice', ts: new Date().toISOString() });
 });
 
-// ─── Serve React frontend (built by Vite into /dist) ──────────────────────────
+// ── Serve React frontend ──────────────────────────────────────────────────────
 const frontendDist = path.join(__dirname, '../../dist');
 app.use(express.static(frontendDist));
-
-// All non-API routes return the React app (client-side routing)
 app.get('*', (req, res) => {
-  if (req.path.startsWith('/api')) {
-    return res.status(404).json({ error: 'API route not found' });
-  }
+  if (req.path.startsWith('/api')) return res.status(404).json({ error: 'Not found' });
   res.sendFile(path.join(frontendDist, 'index.html'));
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
+// ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n🚀 PropVoice API running on port ${PORT}`);
-  console.log(`   Health: http://localhost:${PORT}/health`);
-  console.log(`   Env:    ${process.env.NODE_ENV ?? 'development'}\n`);
+  console.log(`\n🏠 PropVoice running on port ${PORT}`);
+  console.log(`   Health: http://localhost:${PORT}/health\n`);
+  startAllSchedulers();
 });
 
 export default app;
