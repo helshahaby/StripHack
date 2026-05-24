@@ -1,0 +1,173 @@
+// PropVoice Prisma Schema
+// Database: PostgreSQL (hosted on Railway)
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ─── ENUMS ─────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  TENANT
+  LANDLORD
+  VENDOR
+  ADMIN
+}
+
+enum TicketStatus {
+  OPEN
+  DISPATCHED
+  WORK_IN_PROGRESS
+  RESOLVED
+  PAID
+  FAILED
+}
+
+enum ServiceCategory {
+  PLUMBING
+  CLEANING
+  HEATING
+  APPLIANCES
+  PAINTING
+  ELECTRICAL
+}
+
+enum RentStatus {
+  PAID
+  PENDING
+  OVERDUE
+}
+
+enum TransactionType {
+  RENT_COLLECTION
+  VENDOR_ESCROW_HOLD
+  VENDOR_PAYOUT
+  PLATFORM_FEE
+}
+
+enum TransactionStatus {
+  PENDING
+  IN_ESCROW
+  SUCCEEDED
+  FAILED
+}
+
+// ─── MODELS ────────────────────────────────────────────────────────────────────
+
+model User {
+  id               String    @id @default(uuid())
+  email            String    @unique
+  name             String
+  phone            String?   @unique
+  role             UserRole  @default(TENANT)
+
+  // Stripe Integration
+  stripeCustomerId String?   @unique // Tenants: paying rent
+  stripeAccountId  String?   @unique // Landlords & Vendors: Stripe Connect Express
+  isOnboardingDone Boolean   @default(false)
+
+  // Relations
+  ownedProperties  Property[]      @relation("LandlordProperties")
+  tenancies        Apartment[]     @relation("TenantApartments")
+  vendorTickets    ServiceTicket[] @relation("VendorAssignedTickets")
+  transactions     Transaction[]
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([phone])
+  @@index([stripeAccountId])
+}
+
+model Property {
+  id         String      @id @default(uuid())
+  name       String      // e.g., "Schottengasse Complex"
+  address    String      @unique
+  landlordId String
+  landlord   User        @relation("LandlordProperties", fields: [landlordId], references: [id], onDelete: Cascade)
+
+  apartments Apartment[]
+
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@index([landlordId])
+}
+
+model Apartment {
+  id         String          @id @default(uuid())
+  unitNumber String          // e.g., "Apt 4B"
+  propertyId String
+  property   Property        @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  tenantId   String?
+  tenant     User?           @relation("TenantApartments", fields: [tenantId], references: [id], onDelete: SetNull)
+
+  rentAmount Int             // In cents: €1450.00 = 145000
+  rentStatus RentStatus      @default(PENDING)
+
+  tickets    ServiceTicket[]
+
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@index([propertyId])
+  @@index([tenantId])
+}
+
+model ServiceTicket {
+  id               String          @id @default(uuid())
+  apartmentId      String
+  apartment        Apartment       @relation(fields: [apartmentId], references: [id], onDelete: Cascade)
+
+  category         ServiceCategory
+  status           TicketStatus    @default(OPEN)
+
+  // ElevenLabs voice call tracking
+  voiceSessionId   String?         @unique
+  latestTranscript String?         @db.Text
+
+  // Vendor assignment
+  vendorId         String?
+  vendor           User?           @relation("VendorAssignedTickets", fields: [vendorId], references: [id], onDelete: SetNull)
+  quotedAmount     Int?            // In cents: €150.00 = 15000
+
+  transactions     Transaction[]
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([apartmentId])
+  @@index([vendorId])
+  @@index([status])
+}
+
+model Transaction {
+  id                    String            @id @default(uuid())
+  userId                String
+  user                  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  ticketId              String?
+  ticket                ServiceTicket?    @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  type                  TransactionType
+  status                TransactionStatus @default(PENDING)
+  amount                Int               // In cents. Positive = credit, Negative = debit.
+
+  // Stripe references
+  stripePaymentIntentId String?           @unique
+  stripeTransferId      String?           @unique
+  stripeReference       String?           // Short display code e.g. 'ch_3Mv8...'
+
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@index([userId])
+  @@index([ticketId])
+  @@index([stripePaymentIntentId])
+}
