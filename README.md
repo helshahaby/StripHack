@@ -1,0 +1,2 @@
+# StripHack
+Manage payments
